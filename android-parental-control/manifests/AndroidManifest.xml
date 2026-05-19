@@ -1,0 +1,205 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    AndroidManifest.xml  —  v2
+    Target SDK: 35 (Android 15)   Min SDK: 26
+
+    Changes from v1:
+    • WatchdogService added with android:process=":watchdog" — runs in a
+      separate Linux process so the OS cannot kill it alongside the main process.
+    • MainBridgeService added — exposes IMainBridge to the :watchdog process
+      for the mutual DeathRecipient handshake.
+    • WorkManager worker declaration removed — WatchdogWorker is deleted.
+    • foregroundServiceType="specialUse" carried forward on both services that
+      need it (VPN service + watchdog).
+-->
+<manifest
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    package="com.example.parentalcontrol">
+
+    <!-- ================================================================= -->
+    <!-- Permissions                                                        -->
+    <!-- ================================================================= -->
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.BIND_VPN_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.BIND_DEVICE_ADMIN" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- UsageStatsManager — user must grant manually in                   -->
+    <!-- Settings → Apps → Special app access → Usage access               -->
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+
+    <!-- Required for ForegroundMonitorService on API 34+                  -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <!-- ================================================================= -->
+    <!-- Application                                                        -->
+    <!-- ================================================================= -->
+    <application
+        android:name=".ParentalControlApp"
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:allowBackup="false"
+        android:supportsRtl="true"
+        android:extractNativeLibs="true"
+        android:theme="@style/Theme.ParentalControl">
+
+        <!-- ============================================================= -->
+        <!-- Device Admin Receiver                                          -->
+        <!-- ============================================================= -->
+        <receiver
+            android:name=".AdminReceiver"
+            android:exported="true"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin_policies" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+                <action android:name="android.app.action.DEVICE_ADMIN_DISABLE_REQUESTED" />
+                <action android:name="android.app.action.DEVICE_ADMIN_DISABLED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- ============================================================= -->
+        <!-- VPN Foreground Service  (main process)                        -->
+        <!-- ============================================================= -->
+        <service
+            android:name=".ParentalControlVpnService"
+            android:exported="true"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:foregroundServiceType="specialUse">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="contentFilter" />
+        </service>
+
+        <!-- ============================================================= -->
+        <!-- MainBridgeService  (main process)                             -->
+        <!--                                                               -->
+        <!-- Exposes IMainBridge to the :watchdog process.                 -->
+        <!-- android:exported="false" — only internal inter-process bind.  -->
+        <!-- ============================================================= -->
+        <service
+            android:name=".MainBridgeService"
+            android:exported="false" />
+
+        <!-- ============================================================= -->
+        <!-- WatchdogService  (:watchdog process)                          -->
+        <!--                                                               -->
+        <!-- android:process=":watchdog" creates a separate Linux process. -->
+        <!-- The OS schedules it at a different priority from the main     -->
+        <!-- process so an OOM kill of :main leaves :watchdog alive.       -->
+        <!--                                                               -->
+        <!-- android:exported="false" — only the main process can bind.    -->
+        <!-- foregroundServiceType="specialUse" required because the       -->
+        <!-- watchdog runs a persistent background job on API 34+.         -->
+        <!-- ============================================================= -->
+        <service
+            android:name=".WatchdogService"
+            android:exported="false"
+            android:process=":watchdog"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="systemMonitor" />
+        </service>
+
+        <!-- ============================================================= -->
+        <!-- Supervised-hours alarm receiver                               -->
+        <!--                                                               -->
+        <!-- Receives two daily AlarmManager intents to suspend/unsuspend  -->
+        <!-- com.android.settings at the configured supervised-hour        -->
+        <!-- boundaries.  android:exported="false" — AlarmManager delivers -->
+        <!-- the intent via the package's own process; no external callers -->
+        <!-- can trigger it.                                                -->
+        <!-- ============================================================= -->
+        <receiver
+            android:name=".SupervisionAlarmReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.example.parentalcontrol.SUSPEND_SETTINGS" />
+                <action android:name="com.example.parentalcontrol.UNSUSPEND_SETTINGS" />
+            </intent-filter>
+        </receiver>
+
+        <!-- ============================================================= -->
+        <!-- ForegroundMonitorService                                       -->
+        <!--                                                               -->
+        <!-- Polls UsageStatsManager every ~1.5 s and launches             -->
+        <!-- BlockerActivity over any package in the blocklist.            -->
+        <!-- foregroundServiceType="dataSync" is the closest standard type -->
+        <!-- for a usage-monitoring service on API 34+.                    -->
+        <!-- ============================================================= -->
+        <service
+            android:name=".ForegroundMonitorService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- ============================================================= -->
+        <!-- BlockerActivity                                                -->
+        <!--                                                               -->
+        <!-- Full-screen lock screen drawn over blocked apps.              -->
+        <!-- noHistory=true: never appears in the Recents task list.       -->
+        <!-- excludeFromRecents=true: cannot be restored from the switcher -->
+        <!-- ============================================================= -->
+        <activity
+            android:name=".BlockerActivity"
+            android:exported="false"
+            android:noHistory="true"
+            android:excludeFromRecents="true"
+            android:launchMode="singleInstance"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
+
+        <!-- ============================================================= -->
+        <!-- PinLockActivity                                                -->
+        <!--                                                               -->
+        <!-- PIN gate launched from AdminReceiver.onDisableRequested()     -->
+        <!-- and from BlockerActivity "Unlock" button.                     -->
+        <!-- ============================================================= -->
+        <activity
+            android:name=".PinLockActivity"
+            android:exported="false"
+            android:noHistory="true"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
+
+        <!-- ============================================================= -->
+        <!-- Boot Receiver                                                  -->
+        <!-- ============================================================= -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter android:priority="999">
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- ============================================================= -->
+        <!-- Main Activity                                                  -->
+        <!-- ============================================================= -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+    </application>
+</manifest>
