@@ -99,20 +99,30 @@ class ForegroundMonitorService : Service() {
      * reliable for real-time detection.
      */
     private fun foregroundPackage(): String? {
-        val now   = System.currentTimeMillis()
-        val start = now - 3_000L   // look back 3 s to catch fast launches
-        val events = usageStats.queryEvents(start, now) ?: return null
-
-        var lastPackage: String? = null
-        val event = UsageEvents.Event()
-        while (events.hasNextEvent()) {
-            events.getNextEvent(event)
-            if (event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) {
-                lastPackage = event.packageName
+            val now = System.currentTimeMillis()
+            val start = now - 10_000L   // 10-second lookback for robust state reconstruction
+            val events = usageStats.queryEvents(start, now) ?: return null
+    
+            val event = UsageEvents.Event()
+            var currentForeground: String? = null
+    
+            // Replay the event stream. The last package to throw a FOREGROUND event 
+            // WITHOUT throwing a subsequent BACKGROUND event is our active target.
+            while (events.hasNextEvent()) {
+                events.getNextEvent(event)
+                when (event.eventType) {
+                    UsageEvents.Event.MOVE_TO_FOREGROUND -> {
+                        currentForeground = event.packageName
+                    }
+                    UsageEvents.Event.MOVE_TO_BACKGROUND -> {
+                        if (currentForeground == event.packageName) {
+                            currentForeground = null
+                        }
+                    }
+                }
             }
+            return currentForeground
         }
-        return lastPackage
-    }
 
     private fun checkForeground() {
         val pkg = foregroundPackage() ?: return
