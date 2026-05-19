@@ -14,26 +14,36 @@ class DefensiveAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
-        val packageName = event.packageName?.toString() ?: return
+        val packageName = event.packageName?.toString() ?: ""
+        val rootNode = rootInActiveWindow ?: return
 
-        // 1. Defend the Settings App & Package Installer
+        // 1. Universal Uninstall Defense (Defeats OEM Launchers)
+        // We don't check package name here. If an uninstall dialog pops up anywhere, kill it.
+        if (findText(rootNode, "Do you want to uninstall") || 
+            findText(rootNode, "Uninstall this app")) {
+            Log.w(TAG, "OEM Uninstall dialog detected. Ejecting.")
+            performGlobalAction(GLOBAL_ACTION_HOME)
+            return
+        }
+
+        // 2. Defend the Settings App & Package Installer
         if (packageName == "com.android.settings" || packageName == "com.google.android.packageinstaller") {
-            val rootNode = rootInActiveWindow ?: return
             
-            // Hunt for UI elements that threaten persistence
+            // Hunt for UI elements that threaten persistence. 
+            // Added "Accessibility" and the app name to defend the Guardian itself.
             if (findText(rootNode, "Force stop") || 
                 findText(rootNode, "Uninstall") || 
                 findText(rootNode, "Usage access") ||
-                findText(rootNode, "VPN")) {
+                findText(rootNode, "VPN") ||
+                findText(rootNode, "Accessibility") || 
+                findText(rootNode, "Parental Control")) { 
                 
                 Log.w(TAG, "Hostile UI interaction detected. Ejecting user.")
                 performGlobalAction(GLOBAL_ACTION_HOME)
                 return
             }
 
-            // Intercept the Device Admin deactivation screen here, since Android 10+ 
-            // blocks our DeviceAdminReceiver from launching activities in the background.
-            // AccessibilityServices are exempt from background launch restrictions.
+            // Intercept Device Admin deactivation
             if (findText(rootNode, "Deactivate this device admin app") || 
                 findText(rootNode, "Remove work profile")) {
                 
@@ -46,6 +56,14 @@ class DefensiveAccessibilityService : AccessibilityService() {
                 return
             }
         }
+
+        // 3. Auto-Accept VPN Permission Dialogs
+        if (packageName == "com.android.vpndialogs") {
+            if (clickNodeByText(rootNode, "OK") || clickNodeByText(rootNode, "Allow")) {
+                Log.i(TAG, "VPN Dialog automatically accepted.")
+            }
+        }
+    }
 
         // 2. Auto-Accept VPN Permission Dialogs
         if (packageName == "com.android.vpndialogs") {
