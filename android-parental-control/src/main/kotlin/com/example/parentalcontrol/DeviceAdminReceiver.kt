@@ -79,13 +79,11 @@ class AdminReceiver : DeviceAdminReceiver() {
     override fun onDisableRequested(context: Context, intent: Intent): CharSequence {
         Log.w(TAG, "onDisableRequested: deactivation attempt intercepted")
 
-        // Launch PIN lock to interrupt the user's flow.
-        // PinLockActivity is a placeholder — implement PIN verification there.
-        val pinIntent = Intent(context, PinLockActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-            putExtra(PinLockActivity.EXTRA_REASON, PinLockActivity.REASON_ADMIN_DISABLE)
-        }
-        context.startActivity(pinIntent)
+        //  Do NOT call startActivity() here. Android 10+ will silently 
+        // block it because the receiver is technically in the background relative 
+        // to the Settings app. 
+        // Our DefensiveAccessibilityService is monitoring for the deactivation screen 
+        // and will handle the violent UI ejectio
 
         return "Parental controls are active on this device. " +
                "A parent PIN is required to disable them."
